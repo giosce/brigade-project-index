@@ -24,6 +24,11 @@ const githubAxios = axios.create({
         : null
 });
 
+
+// prepare logger
+const logger = require('winston');
+
+
 require('yargs')
     .command({
         command: '$0',
@@ -61,6 +66,11 @@ require('yargs')
                 describe: 'A target branch/ref to commit the imported orgs tree to',
                 type: 'string'
             },
+            debug: {
+                describe: 'Enable more verbose output',
+                type: 'boolean',
+                default: false
+            }
         },
         handler: async argv => {
             const {
@@ -75,8 +85,22 @@ require('yargs')
                 // commit options
                 commitTo,
                 commitMessage,
-                commitOrgsTo
+                commitOrgsTo,
+
+                // run options
+                debug,
             } = argv;
+
+
+            // configure logger
+            logger.add(new logger.transports.Console({
+                level: process.env.DEBUG || debug ? 'debug' : 'info',
+                stderrLevels: Object.keys(logger.config.npm.levels),
+                format: logger.format.combine(
+                    logger.format.colorize(),
+                    logger.format.simple()
+                )
+            }));
 
 
             // prepare interfaces
@@ -104,16 +128,16 @@ require('yargs')
                 let orgsTree;
 
                 try {
-                    console.error('loading orgs tree from cfapi repo...');
+                    logger.info('loading orgs tree from cfapi repo...');
                     orgsTree = await loadOrgsTree(repo, orgsSource);
-                    console.error('orgs tree loaded');
+                    logger.info('orgs tree loaded');
                 } catch (err) {
-                    console.error('failed to load organizations:', err);
+                    logger.error(`failed to load organizations: ${err}`);
                     process.exit(1);
                 }
 
                 const orgsTreeHash = await orgsTree.write();
-                console.error(`orgs tree written: ${orgsTreeHash}`);
+                logger.info(`orgs tree written: ${orgsTreeHash}`);
 
 
                 // check for existing orgs commit
@@ -135,7 +159,7 @@ require('yargs')
                     // optionally write new intermediary orgs commit to ref
                     if (commitOrgsRef) {
                         await git.updateRef(commitOrgsRef, orgsCommit);
-                        console.warn(`committed imported orgs tree to ${commitOrgsRef}: ${orgsCommit}`);
+                        logger.info(`committed imported orgs tree to ${commitOrgsRef}: ${orgsCommit}`);
                     }
                 }
 
@@ -166,7 +190,7 @@ require('yargs')
                     // optionally commit main index tree into
                     if (commitRef) {
                         await git.updateRef(commitRef, outputCommit);
-                        console.warn(`merged new orgs tree into "${commitRef}": ${outputCommitParents.join('+')}->${outputCommit}`);
+                        logger.info(`merged new orgs tree into "${commitRef}": ${outputCommitParents.join('+')}->${outputCommit}`);
                     }
                 }
             }
@@ -195,7 +219,7 @@ require('yargs')
                     }
 
                     if (!projectsListUrl) {
-                        console.error(`skipping org with no projects list: ${orgName}`);
+                        logger.warn(`skipping org with no projects list: ${orgName}`);
                         continue;
                     }
 
@@ -208,7 +232,7 @@ require('yargs')
                         orgProjectsTree = await loadGithubOrgProjects(repo, username);
 
                         if (!orgProjectsTree) {
-                            console.error(`skipping empty projects list for ${orgName}: ${projectsListUrl}`);
+                            logger.warn(`skipping empty projects list for ${orgName}: ${projectsListUrl}`);
                             continue;
                         }
                     } else if (githubTopicMatch) {
@@ -216,7 +240,7 @@ require('yargs')
                         orgProjectsTree = await loadGithubTopicProjects(repo, topic);
 
                         if (!orgProjectsTree) {
-                            console.error(`skipping empty projects list for ${orgName}: ${projectsListUrl}`);
+                            logger.warn(`skipping empty projects list for ${orgName}: ${projectsListUrl}`);
                             continue;
                         }
                     } else {
@@ -224,7 +248,7 @@ require('yargs')
                         orgProjectsTree = await loadFeedProjects(repo, projectsListUrl);
 
                         if (!orgProjectsTree) {
-                            console.error(`skipping empty projects list for ${orgName}: ${projectsListUrl}`);
+                            logger.warn(`skipping empty projects list for ${orgName}: ${projectsListUrl}`);
                             continue;
                         }
                     }
@@ -248,7 +272,7 @@ require('yargs')
                         // optionally commit main index tree into
                         if (commitRef) {
                             await git.updateRef(commitRef, outputCommit);
-                            console.warn(`merged ${orgName} projects tree into "${commitRef}": ${outputCommit}`);
+                            logger.info(`merged ${orgName} projects tree into "${commitRef}": ${outputCommit}`);
                         }
                     }
                 }
@@ -310,7 +334,7 @@ async function loadOrgsTree(repo, orgsSource) {
 async function loadGithubOrgProjects(repo, username) {
 
     // load repos
-    console.error(`loading repos from github.com/${username}...`);
+    logger.info(`loading repos from github.com/${username}...`);
     const repos = [];
     let next = `/users/${username}/repos`;
     let reposProgressBar;
@@ -321,7 +345,7 @@ async function loadGithubOrgProjects(repo, username) {
         try {
             response = await githubAxios.get(next);
         } catch (err) {
-            console.error(`GitHub request failed: ${err.response ? err.response.data.message || err.response.status : err.message}`);
+            logger.error(`GitHub request failed: ${err.response ? err.response.data.message || err.response.status : err.message}`);
 
             if (err.response && err.response.status == 404) {
                 return null;
@@ -329,7 +353,7 @@ async function loadGithubOrgProjects(repo, username) {
 
             // GitHub will return 403 when you hit rate limit without auth
             if (err.response && err.response.status == 403) {
-                console.error('Try setting GITHUB_ACTOR and GITHUB_TOKEN');
+                logger.error('Try setting GITHUB_ACTOR and GITHUB_TOKEN');
                 process.exit(1);
             }
 
@@ -398,7 +422,7 @@ async function loadGithubTopicProjects(repo, topic) {
     https://api.github.comhack-for-la
 
     // load repos
-    console.error(`loading repos from github.com/topics${topic}...`);
+    logger.info(`loading repos from github.com/topics${topic}...`);
     const repos = [];
     let next = `/search/repositories?q=topic:${topic}`;
     let reposProgressBar;
@@ -409,7 +433,7 @@ async function loadGithubTopicProjects(repo, topic) {
         try {
             response = await githubAxios.get(next);
         } catch (err) {
-            console.error(`GitHub request failed: ${err.response ? err.response.data.message || err.response.status : err.message}`);
+            logger.error(`GitHub request failed: ${err.response ? err.response.data.message || err.response.status : err.message}`);
 
             if (err.response && err.response.status == 404) {
                 return null;
@@ -417,7 +441,7 @@ async function loadGithubTopicProjects(repo, topic) {
 
             // GitHub will return 403 when you hit rate limit without auth
             if (err.response && err.response.status == 403) {
-                console.error('Try setting GITHUB_ACTOR and GITHUB_TOKEN');
+                logger.error('try setting GITHUB_ACTOR and GITHUB_TOKEN');
                 process.exit(1);
             }
 
@@ -491,13 +515,13 @@ async function loadFeedProjects(repo, projectsListUrl) {
 
 
     // load response from URL
-    console.error(`loading projects from ${projectsListUrl}...`);
+    logger.info(`loading projects from ${projectsListUrl}...`);
     let response;
 
     try {
         response = await axios.get(projectsListUrl, { responseType: 'stream' });
     } catch (err) {
-        console.error(`Feed request failed: ${err.message}`);
+        logger.error(`Feed request failed: ${err}`);
 
         if (err.response && err.response.status == 404) {
             return null;
@@ -524,7 +548,7 @@ async function loadFeedProjects(repo, projectsListUrl) {
         } else if(lowerCaseUrl.endsWith('.csv')) {
             contentType = 'text/csv';
         } else {
-            console.error(`Response Content-Type must be text/csv or application/csv, got: ${contentType}`);
+            logger.warn(`Response Content-Type must be text/csv or application/csv, got: ${contentType}`);
             return null;
         }
     }
@@ -605,7 +629,7 @@ async function loadFeedProjects(repo, projectsListUrl) {
         }
 
         if (!projectData.name) {
-            console.error('Skipping project with no name');
+            logger.warn('skipping project with no name');
             continue;
         }
 
@@ -636,7 +660,7 @@ async function loadFeedProjects(repo, projectsListUrl) {
                 if (err.response && err.response.status == 404) {
                     projectData.flags = [ 'github_404' ]
                 } else {
-                    console.error(`GitHub request failed: ${err.response ? err.response.data.message || err.response.status : err.message}`);
+                    logger.error(`GitHub request failed: ${err.response ? err.response.data.message || err.response.status : err.message}`);
                 }
             }
         }
